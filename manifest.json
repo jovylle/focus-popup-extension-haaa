@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Focus Popup",
+  "version": "1.0.0",
+  "description": "Open Messenger in a focused popup window.",
+  "permissions": ["windows"],
+  "action": {
+    "default_title": "Focus Popup",
+    "default_popup": "popup.html"
+  }
+}
