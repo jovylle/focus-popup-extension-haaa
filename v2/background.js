@@ -1,101 +1,149 @@
-const POPUP_WIDTH = 420;
-const POPUP_HEIGHT = 800;
-const MESSENGER_URL = "https://messenger.com";
-const STORAGE_KEY = "messengerWindowId";
+const MESSENGER_URL = "https://messenger.com/";
+const MESSENGER_MATCH = "https://messenger.com/*";
+const GROUP_TITLE = "Messenger";
+const TAB_KEY = "messengerTabId";
+const OPEN_KEY = "panelOpen";
+const LAST_TAB_KEY = "lastActiveTabId";
 
-async function getRightDockedBounds() {
-  const displays = await chrome.system.display.getInfo();
-  const primary =
-    displays.find((d) => d.isPrimary) ?? displays[0];
-  const { left, top, width, height } = primary.workArea;
-
-  return {
-    left: left + width - POPUP_WIDTH,
-    top,
-    width: POPUP_WIDTH,
-    height: Math.min(POPUP_HEIGHT, height),
-  };
+async function getActiveTabInCurrentWindow() {
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+  return tab ?? null;
 }
 
-async function getStoredWindowId() {
-  const { [STORAGE_KEY]: id } = await chrome.storage.session.get(STORAGE_KEY);
-  return id ?? null;
+async function findMessengerTab() {
+  const tabs = await chrome.tabs.query({ url: MESSENGER_MATCH });
+  return tabs[0] ?? null;
 }
 
-async function clearStoredWindowId() {
-  await chrome.storage.session.remove(STORAGE_KEY);
+async function rememberReturnTab() {
+  const tab = await getActiveTabInCurrentWindow();
+  if (tab?.id && !tab.url?.startsWith("https://messenger.com")) {
+    await chrome.storage.session.set({ [LAST_TAB_KEY]: tab.id });
+  }
 }
 
-async function storeWindowId(windowId) {
-  await chrome.storage.session.set({ [STORAGE_KEY]: windowId });
-}
+async function focusReturnTab() {
+  const { [LAST_TAB_KEY]: tabId } = await chrome.storage.session.get(
+    LAST_TAB_KEY
+  );
+  if (!tabId) return;
 
-async function messengerWindowStillOpen(windowId) {
   try {
-    const win = await chrome.windows.get(windowId, { populate: true });
-    return win.tabs?.some((tab) =>
-      tab.url?.startsWith("https://messenger.com")
-    );
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    // previous tab was closed
+  }
+}
+
+async function ensureGroup(tab) {
+  if (tab.groupId !== -1) {
+    await chrome.tabGroups.update(tab.groupId, {
+      title: GROUP_TITLE,
+      collapsed: false,
+    });
+    return tab.groupId;
+  }
+
+  const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
+  await chrome.tabGroups.update(groupId, {
+    title: GROUP_TITLE,
+    collapsed: false,
+    color: "blue",
+  });
+  return groupId;
+}
+
+async function openMessengerPanel() {
+  await rememberReturnTab();
+
+  let tab = await findMessengerTab();
+  const active = await getActiveTabInCurrentWindow();
+
+  if (!tab) {
+    tab = await chrome.tabs.create({
+      url: MESSENGER_URL,
+      active: true,
+      pinned: true,
+      windowId: active?.windowId,
+    });
+  } else {
+    if (active?.windowId != null && tab.windowId !== active.windowId) {
+      tab = await chrome.tabs.move(tab.id, {
+        windowId: active.windowId,
+        index: -1,
+      });
+    }
+    await chrome.tabs.update(tab.id, { active: true, pinned: true });
+  }
+
+  await ensureGroup(tab);
+  await chrome.storage.session.set({
+    [TAB_KEY]: tab.id,
+    [OPEN_KEY]: true,
+  });
+}
+
+async function hideMessengerPanel() {
+  const { [TAB_KEY]: tabId } = await chrome.storage.session.get(TAB_KEY);
+  if (!tabId) {
+    await chrome.storage.session.set({ [OPEN_KEY]: false });
+    return;
+  }
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.groupId !== -1) {
+      await chrome.tabGroups.update(tab.groupId, { collapsed: true });
+    }
+  } catch {
+    await chrome.storage.session.remove(TAB_KEY);
+  }
+
+  await focusReturnTab();
+  await chrome.storage.session.set({ [OPEN_KEY]: false });
+}
+
+async function isPanelOpen() {
+  const { [OPEN_KEY]: open, [TAB_KEY]: tabId } =
+    await chrome.storage.session.get([OPEN_KEY, TAB_KEY]);
+  if (!open || !tabId) return false;
+
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
   } catch {
     return false;
   }
 }
 
-async function closeMessengerPopup(windowId) {
-  try {
-    await chrome.windows.remove(windowId);
-  } catch {
-    // already closed
-  }
-  await clearStoredWindowId();
-}
-
-async function openMessengerPopup() {
-  const { left, top, width, height } = await getRightDockedBounds();
-
-  const win = await chrome.windows.create({
-    url: MESSENGER_URL,
-    type: "popup",
-    focused: true,
-    left,
-    top,
-    width,
-    height,
-  });
-
-  if (win.id != null) {
-    await storeWindowId(win.id);
+async function toggleMessengerPanel() {
+  if (await isPanelOpen()) {
+    await hideMessengerPanel();
+  } else {
+    await openMessengerPanel();
   }
 }
 
-async function toggleMessengerPopup() {
-  const windowId = await getStoredWindowId();
-
-  if (windowId != null && (await messengerWindowStillOpen(windowId))) {
-    await closeMessengerPopup(windowId);
-    return;
-  }
-
-  await clearStoredWindowId();
-  await openMessengerPopup();
+async function clearPanelState() {
+  await chrome.storage.session.remove([TAB_KEY, OPEN_KEY, LAST_TAB_KEY]);
 }
+
+chrome.action.onClicked.addListener(() => {
+  toggleMessengerPanel();
+});
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === "toggle-messenger") {
-    toggleMessengerPopup();
+    toggleMessengerPanel();
   }
 });
 
-chrome.windows.onRemoved.addListener(async (windowId) => {
-  const storedId = await getStoredWindowId();
-  if (storedId === windowId) {
-    await clearStoredWindowId();
-  }
-});
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.action === "toggle-messenger") {
-    toggleMessengerPopup().then(() => sendResponse({ ok: true }));
-    return true;
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const { [TAB_KEY]: storedId } = await chrome.storage.session.get(TAB_KEY);
+  if (storedId === tabId) {
+    await clearPanelState();
   }
 });

@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Focus Popup",
-  "version": "2.0.0",
-  "description": "Open Messenger in a right-docked popup; toggle via toolbar or shortcut.",
-  "permissions": ["windows", "system.display", "storage"],
+  "version": "2.1.0",
+  "description": "Dock Messenger as a pinned tab group—no extra window, no reload on toggle.",
+  "permissions": ["tabs", "tabGroups", "storage"],
+  "host_permissions": ["https://messenger.com/*"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Focus Popup",
-    "default_popup": "popup.html"
+    "default_title": "Toggle Messenger"
   },
   "commands": {
     "toggle-messenger": {
@@ -17,7 +17,7 @@
         "default": "Alt+Shift+M",
         "mac": "Alt+Shift+M"
       },
-      "description": "Toggle Messenger popup"
+      "description": "Toggle Messenger panel"
     }
   }
 }
